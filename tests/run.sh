@@ -200,6 +200,47 @@ check_project_install() {
     rm -rf "$project"
 }
 
+# Run the guard hook on one command as Claude Code would; print its exit code.
+guard_exit() {
+    local cwd="$1" command="$2" payload
+    payload="$(python3 -c 'import json, sys; print(json.dumps({"cwd": sys.argv[1], "tool_input": {"command": sys.argv[2]}}))' "$cwd" "$command")"
+    local code=0
+    printf '%s' "$payload" | bash "$ROOT/.claude/hooks/guard-bash.sh" >/dev/null 2>&1 || code=$?
+    printf '%s' "$code"
+}
+
+# The guard must read the branch of the repo a git global option points at, not the caller's.
+# Caller is on a feature branch; ../protected is on main, ../feature is on a feature branch.
+check_guard_redirected_repo() {
+    local base caller cmd target want got bad=()
+    base="$(mktemp -d)"
+    caller="$base/caller"
+    git init -q -b feature-x "$caller"
+    git init -q -b main "$base/protected"
+    git init -q -b feature-y "$base/feature"
+    for target in protected feature; do
+        [[ "$target" == protected ]] && want=2 || want=0
+        for cmd in \
+            "git -C ../$target commit -m x" \
+            "git -C../$target commit -m x" \
+            "git -C $base/$target commit -m x" \
+            "git -C$base/$target commit -m x" \
+            "git --git-dir ../$target/.git commit -m x" \
+            "git --git-dir=../$target/.git commit -m x" \
+            "git -c user.name=x -C ../$target --work-tree ../$target commit -m x"; do
+            got="$(guard_exit "$caller" "$cmd")"
+            [[ "$got" == "$want" ]] || bad+=("\`$cmd\` exited $got, want $want")
+        done
+    done
+    rm -rf "$base"
+    if [[ "${#bad[@]}" -eq 0 ]]; then
+        pass "guard-bash: -C (spaced and attached) and --git-dir commits are checked against the target repo"
+    else
+        fail "guard-bash: -C (spaced and attached) and --git-dir commits are checked against the target repo" \
+            "$(printf '%s; ' "${bad[@]}")"
+    fi
+}
+
 check_frontmatter
 check_frontmatter_rejects_unquoted_flow
 check_headings
@@ -207,6 +248,7 @@ check_no_em_dashes
 check_manifests
 check_symlink_install
 check_project_install
+check_guard_redirected_repo
 
 if ((failures)); then
     printf '\n%d check(s) failed\n' "$failures"

@@ -79,8 +79,14 @@ is_protected() {
     return 1
 }
 
+# $1 is the directory git runs in. git_dir, set by check_git from --git-dir, is passed through
+# as given: git resolves a relative one against the directory it ends up in, as here.
 current_branch() {
-    git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null || true
+    if [[ -n "${git_dir:-}" ]]; then
+        git -C "$1" --git-dir="$git_dir" symbolic-ref --quiet --short HEAD 2>/dev/null || true
+    else
+        git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null || true
+    fi
 }
 
 block() {
@@ -175,16 +181,32 @@ rule_delete_protected() {
 
 # Run every rule against one `git ...` invocation. $1 is the directory it runs in.
 check_git() {
-    local dir="$1"
+    local dir="$1" path git_dir=""
     shift
-    # Global options come before the subcommand; -C changes the directory.
+    # Global options come before the subcommand. -C changes the directory and --git-dir the
+    # repository, so both decide whose branch the rules read. git accepts -C<path> attached
+    # and --git-dir=<path>; -c, --work-tree and --namespace don't change which HEAD is read.
     while [[ $# -gt 0 && "$1" == -* ]]; do
         case "$1" in
-            -C)
-                [[ "${2:-}" == /* ]] && dir="$2" || dir="$dir/${2:-}"
+            -C | -C?*)
+                if [[ "$1" == -C ]]; then
+                    path="${2:-}"
+                    shift 2
+                else
+                    path="${1#-C}"
+                    shift
+                fi
+                [[ "$path" == /* ]] && dir="$path" || dir="$dir/$path"
+                ;;
+            --git-dir)
+                git_dir="${2:-}"
                 shift 2
                 ;;
-            -c | --git-dir | --work-tree | --namespace) shift 2 ;;
+            --git-dir=*)
+                git_dir="${1#--git-dir=}"
+                shift
+                ;;
+            -c | --work-tree | --namespace) shift 2 ;;
             *) shift ;;
         esac
     done
