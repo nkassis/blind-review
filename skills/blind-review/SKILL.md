@@ -1,7 +1,7 @@
 ---
 name: blind-review
 description: Independent review of a finished deliverable against the brief it was made from, by a fresh subagent that sees only the brief and the deliverable, never the conversation. Use before work leaves your hands (a PR, spec, design, proposal, report), or call it from another skill as a gate.
-argument-hint: [mode] [audience]
+argument-hint: "[mode] [audience]"
 ---
 
 # Blind review

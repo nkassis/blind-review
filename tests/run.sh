@@ -30,22 +30,36 @@ check_py() {
     fi
 }
 
-check_frontmatter() {
-    check_py "SKILL.md frontmatter parses; name matches directory; description under $DESCRIPTION_LIMIT chars" \
-        "$SKILL" "$(basename "$SKILL_DIR")" "$DESCRIPTION_LIMIT" <<'PY'
+# Validate a SKILL.md frontmatter block. Python stdlib has no YAML parser, so each line must be
+# `key: value` and each value either a quoted string or a plain scalar YAML reads as a string.
+# Prints nothing and exits 0 when valid; prints why and exits 1 otherwise.
+frontmatter_errors() {
+    python3 - "$1" "$2" "$DESCRIPTION_LIMIT" <<'PY'
 import re, sys
 path, dirname, limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
 lines = open(path, encoding="utf-8").read().split("\n")
 if lines[0] != "---" or "---" not in lines[1:]:
     sys.exit("no frontmatter block delimited by --- lines")
+# A plain scalar cannot start with a YAML indicator: [ { start flow collections, * & ! are
+# aliases, anchors and tags, | > are block scalars, # a comment, and so on.
+UNSAFE_START = re.compile(r"[][{},*&!|>%@#`]|[-?:](\s|$)")
 fields = {}
 for line in lines[1:lines.index("---", 1)]:
     m = re.fullmatch(r"([a-z][a-z0-9-]*): (.+)", line)
     if not m:
         sys.exit(f"unparseable frontmatter line: {line!r}")
-    if m[1] in fields:
-        sys.exit(f"duplicate key: {m[1]}")
-    fields[m[1]] = m[2]
+    key, value = m[1], m[2]
+    if key in fields:
+        sys.exit(f"duplicate key: {key}")
+    if value[0] in "\"'":
+        if len(value) < 2 or value[-1] != value[0]:
+            sys.exit(f"{key}: unterminated quoted value: {value!r}")
+        value = value[1:-1]
+    elif UNSAFE_START.match(value):
+        sys.exit(f"{key}: unquoted value starts with a YAML indicator, quote it: {value!r}")
+    elif ": " in value or " #" in value:
+        sys.exit(f"{key}: unquoted value contains ': ' or ' #', quote it: {value!r}")
+    fields[key] = value
 if fields.get("name") != dirname:
     sys.exit(f"name {fields.get('name')!r} does not match directory {dirname!r}")
 desc = fields.get("description", "")
@@ -54,6 +68,29 @@ if not desc.strip():
 if len(desc) >= limit:
     sys.exit(f"description is {len(desc)} chars, limit {limit}")
 PY
+}
+
+check_frontmatter() {
+    local label="SKILL.md frontmatter parses; name matches directory; description under $DESCRIPTION_LIMIT chars" out
+    if out="$(frontmatter_errors "$SKILL" "$(basename "$SKILL_DIR")" 2>&1)"; then
+        pass "$label"
+    else
+        fail "$label" "$out"
+    fi
+}
+
+# The frontmatter check must reject the unquoted flow-sequence value that once shipped.
+check_frontmatter_rejects_unquoted_flow() {
+    local label="frontmatter check rejects unquoted argument-hint: [mode] [audience]" scratch
+    scratch="$(mktemp -d)"
+    mkdir -p "$scratch/blind-review"
+    sed 's/^argument-hint: .*/argument-hint: [mode] [audience]/' "$SKILL" >"$scratch/blind-review/SKILL.md"
+    if frontmatter_errors "$scratch/blind-review/SKILL.md" blind-review >/dev/null 2>&1; then
+        fail "$label" "the check accepted it"
+    else
+        pass "$label"
+    fi
+    rm -rf "$scratch"
 }
 
 check_headings() {
@@ -164,6 +201,7 @@ check_project_install() {
 }
 
 check_frontmatter
+check_frontmatter_rejects_unquoted_flow
 check_headings
 check_no_em_dashes
 check_manifests
