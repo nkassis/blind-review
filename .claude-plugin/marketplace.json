@@ -1,0 +1,15 @@
+{
+  "name": "blind-review",
+  "description": "The blind-review skill: independent review of a deliverable against its brief by a fresh subagent.",
+  "owner": {
+    "name": "Nicolas Kassis",
+    "url": "https://github.com/nkassis"
+  },
+  "plugins": [
+    {
+      "name": "blind-review",
+      "source": "./",
+      "description": "Independent review of a deliverable against its brief by a fresh subagent that never saw the conversation."
+    }
+  ]
+}
