@@ -1,0 +1,13 @@
+{
+  "name": "blind-review",
+  "version": "1.0.0",
+  "description": "Independent review of a deliverable against its brief by a fresh subagent that never saw the conversation.",
+  "author": {
+    "name": "Nicolas Kassis",
+    "url": "https://github.com/nkassis"
+  },
+  "homepage": "https://github.com/nkassis/blind-review",
+  "repository": "https://github.com/nkassis/blind-review",
+  "license": "MIT",
+  "keywords": ["review", "subagent", "gate"]
+}

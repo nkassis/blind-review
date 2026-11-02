@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+# Checks for the skill, the README, the plugin manifests and the manual installs.
+# Needs bash and python3 (stdlib only). Prints PASS/FAIL per check; exits 1 on any FAIL.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SKILL_DIR="$ROOT/skills/blind-review"
+SKILL="$SKILL_DIR/SKILL.md"
+# The skills docs truncate description + when_to_use at 1,536 characters in the listing.
+DESCRIPTION_LIMIT=1536
+EM_DASH=$'\xe2\x80\x94'
+
+failures=0
+
+pass() { printf 'PASS  %s\n' "$1"; }
+fail() {
+    printf 'FAIL  %s\n' "$1"
+    [[ -z "${2:-}" ]] || printf '      %s\n' "$2"
+    failures=$((failures + 1))
+}
+
+# Run a python3 check: it prints nothing and exits 0 on success, or prints why and exits 1.
+check_py() {
+    local label="$1" out
+    shift
+    if out="$(python3 - "$@" 2>&1)"; then
+        pass "$label"
+    else
+        fail "$label" "$out"
+    fi
+}
+
+# Validate a SKILL.md frontmatter block. Python stdlib has no YAML parser, so each line must be
+# `key: value` and each value either a quoted string or a plain scalar YAML reads as a string.
+# Prints nothing and exits 0 when valid; prints why and exits 1 otherwise.
+frontmatter_errors() {
+    python3 - "$1" "$2" "$DESCRIPTION_LIMIT" <<'PY'
+import re, sys
+path, dirname, limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
+lines = open(path, encoding="utf-8").read().split("\n")
+if lines[0] != "---" or "---" not in lines[1:]:
+    sys.exit("no frontmatter block delimited by --- lines")
+# A plain scalar cannot start with a YAML indicator: [ { start flow collections, * & ! are
+# aliases, anchors and tags, | > are block scalars, # a comment, and so on.
+UNSAFE_START = re.compile(r"[][{},*&!|>%@#`]|[-?:](\s|$)")
+fields = {}
+for line in lines[1:lines.index("---", 1)]:
+    m = re.fullmatch(r"([a-z][a-z0-9-]*): (.+)", line)
+    if not m:
+        sys.exit(f"unparseable frontmatter line: {line!r}")
+    key, value = m[1], m[2]
+    if key in fields:
+        sys.exit(f"duplicate key: {key}")
+    if value[0] in "\"'":
+        if len(value) < 2 or value[-1] != value[0]:
+            sys.exit(f"{key}: unterminated quoted value: {value!r}")
+        value = value[1:-1]
+    elif UNSAFE_START.match(value):
+        sys.exit(f"{key}: unquoted value starts with a YAML indicator, quote it: {value!r}")
+    elif ": " in value or " #" in value:
+        sys.exit(f"{key}: unquoted value contains ': ' or ' #', quote it: {value!r}")
+    fields[key] = value
+if fields.get("name") != dirname:
+    sys.exit(f"name {fields.get('name')!r} does not match directory {dirname!r}")
+desc = fields.get("description", "")
+if not desc.strip():
+    sys.exit("description missing")
+if len(desc) >= limit:
+    sys.exit(f"description is {len(desc)} chars, limit {limit}")
+PY
+}
+
+check_frontmatter() {
+    local label="SKILL.md frontmatter parses; name matches directory; description under $DESCRIPTION_LIMIT chars" out
+    if out="$(frontmatter_errors "$SKILL" "$(basename "$SKILL_DIR")" 2>&1)"; then
+        pass "$label"
+    else
+        fail "$label" "$out"
+    fi
+}
+
+# The frontmatter check must reject the unquoted flow-sequence value that once shipped.
+check_frontmatter_rejects_unquoted_flow() {
+    local label="frontmatter check rejects unquoted argument-hint: [mode] [audience]" scratch
+    scratch="$(mktemp -d)"
+    mkdir -p "$scratch/blind-review"
+    sed 's/^argument-hint: .*/argument-hint: [mode] [audience]/' "$SKILL" >"$scratch/blind-review/SKILL.md"
+    if frontmatter_errors "$scratch/blind-review/SKILL.md" blind-review >/dev/null 2>&1; then
+        fail "$label" "the check accepted it"
+    else
+        pass "$label"
+    fi
+    rm -rf "$scratch"
+}
+
+check_headings() {
+    check_py "SKILL.md has Inputs, Steps, Report structure (six sections), Notes" "$SKILL" <<'PY'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+lines = text.split("\n")
+missing = [h for h in ("## Inputs", "## Steps", "## Notes") if h not in lines]
+if missing:
+    sys.exit(f"missing headings: {missing}")
+steps = text[text.index("\n## Steps\n"):text.index("\n## Notes\n")]
+if "**Report structure**" not in steps:
+    sys.exit("no **Report structure** under ## Steps")
+report = steps[steps.index("**Report structure**"):]
+pos = 0
+for n, name in enumerate(["Verdict", "Brief coverage", "Findings", "Consistency", "Judgment", "Keep"], 1):
+    label = f"{n}. **{name}**"
+    found = report.find(label, pos)
+    if found < 0:
+        sys.exit(f"report section missing or out of order: {label}")
+    pos = found
+PY
+}
+
+check_no_em_dashes() {
+    local file
+    for file in "$SKILL" "$ROOT/README.md"; do
+        if grep -n "$EM_DASH" "$file" >/dev/null; then
+            fail "no em dashes in ${file#"$ROOT"/}" "$(grep -n "$EM_DASH" "$file" | head -5)"
+        else
+            pass "no em dashes in ${file#"$ROOT"/}"
+        fi
+    done
+}
+
+check_manifests() {
+    check_py "marketplace.json and plugin.json are valid JSON and every path they reference exists" "$ROOT" <<'PY'
+import json, os, sys
+root = sys.argv[1]
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        sys.exit(f"{os.path.relpath(path, root)}: {e}")
+def paths_in(value):
+    if isinstance(value, str) and (value.startswith("./") or value == "."):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from paths_in(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from paths_in(v)
+def check_exists(base, rel, where):
+    if ".." in rel.split("/"):
+        sys.exit(f"{where}: path contains '..': {rel}")
+    if not os.path.exists(os.path.join(base, rel)):
+        sys.exit(f"{where}: path not found: {rel}")
+market = load(os.path.join(root, ".claude-plugin", "marketplace.json"))
+for key in ("name", "owner", "plugins"):
+    if key not in market:
+        sys.exit(f"marketplace.json: missing {key}")
+if not market["plugins"]:
+    sys.exit("marketplace.json: no plugins")
+for rel in paths_in(market):
+    check_exists(root, rel, "marketplace.json")
+for entry in market["plugins"]:
+    plugin_root = os.path.normpath(os.path.join(root, entry["source"]))
+    manifest = load(os.path.join(plugin_root, ".claude-plugin", "plugin.json"))
+    if manifest.get("name") != entry["name"]:
+        sys.exit(f"entry name {entry['name']!r} differs from plugin.json name {manifest.get('name')!r}")
+    for rel in paths_in(manifest):
+        check_exists(plugin_root, rel, "plugin.json")
+    skill = os.path.join(plugin_root, "skills", "blind-review", "SKILL.md")
+    if not os.path.isfile(skill):
+        sys.exit(f"plugin {entry['name']!r} has no skills/blind-review/SKILL.md")
+PY
+}
+
+# Global manual install: symlink the skill directory into a scratch HOME.
+check_symlink_install() {
+    local home target
+    home="$(mktemp -d)"
+    mkdir -p "$home/.claude/skills"
+    ln -s "$SKILL_DIR" "$home/.claude/skills/blind-review"
+    target="$home/.claude/skills/blind-review/SKILL.md"
+    if [[ -L "$home/.claude/skills/blind-review" && -f "$target" ]] && cmp -s "$target" "$SKILL"; then
+        pass "symlink install: ~/.claude/skills/blind-review/SKILL.md resolves"
+    else
+        fail "symlink install: ~/.claude/skills/blind-review/SKILL.md resolves"
+    fi
+    rm -rf "$home"
+}
+
+# Project-local install: copy the skill directory into a scratch repo's .claude/skills/.
+check_project_install() {
+    local project
+    project="$(mktemp -d)"
+    mkdir -p "$project/.claude/skills"
+    cp -R "$SKILL_DIR" "$project/.claude/skills/"
+    if cmp -s "$project/.claude/skills/blind-review/SKILL.md" "$SKILL"; then
+        pass "project install: .claude/skills/blind-review/SKILL.md present"
+    else
+        fail "project install: .claude/skills/blind-review/SKILL.md present"
+    fi
+    rm -rf "$project"
+}
+
+# Run the guard hook on one command as Claude Code would; print its exit code.
+guard_exit() {
+    local cwd="$1" command="$2" payload
+    payload="$(python3 -c 'import json, sys; print(json.dumps({"cwd": sys.argv[1], "tool_input": {"command": sys.argv[2]}}))' "$cwd" "$command")"
+    local code=0
+    printf '%s' "$payload" | bash "$ROOT/.claude/hooks/guard-bash.sh" >/dev/null 2>&1 || code=$?
+    printf '%s' "$code"
+}
+
+# The guard must read the branch of the repo a git global option points at, not the caller's.
+# Caller is on a feature branch; ../protected is on main, ../feature is on a feature branch.
+check_guard_redirected_repo() {
+    local base caller cmd target want got bad=()
+    base="$(mktemp -d)"
+    caller="$base/caller"
+    git init -q -b feature-x "$caller"
+    git init -q -b main "$base/protected"
+    git init -q -b feature-y "$base/feature"
+    for target in protected feature; do
+        [[ "$target" == protected ]] && want=2 || want=0
+        for cmd in \
+            "git -C ../$target commit -m x" \
+            "git -C../$target commit -m x" \
+            "git -C $base/$target commit -m x" \
+            "git -C$base/$target commit -m x" \
+            "git --git-dir ../$target/.git commit -m x" \
+            "git --git-dir=../$target/.git commit -m x" \
+            "git -c user.name=x -C ../$target --work-tree ../$target commit -m x"; do
+            got="$(guard_exit "$caller" "$cmd")"
+            [[ "$got" == "$want" ]] || bad+=("\`$cmd\` exited $got, want $want")
+        done
+    done
+    rm -rf "$base"
+    if [[ "${#bad[@]}" -eq 0 ]]; then
+        pass "guard-bash: -C (spaced and attached) and --git-dir commits are checked against the target repo"
+    else
+        fail "guard-bash: -C (spaced and attached) and --git-dir commits are checked against the target repo" \
+            "$(printf '%s; ' "${bad[@]}")"
+    fi
+}
+
+check_frontmatter
+check_frontmatter_rejects_unquoted_flow
+check_headings
+check_no_em_dashes
+check_manifests
+check_symlink_install
+check_project_install
+check_guard_redirected_repo
+
+if ((failures)); then
+    printf '\n%d check(s) failed\n' "$failures"
+    exit 1
+fi
+printf '\nAll checks passed\n'
