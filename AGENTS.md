@@ -14,10 +14,10 @@ CI (`.github/workflows/ci.yml`, job name `ci`) runs these on every PR and push t
 
 | Command | What it does |
 | --- | --- |
-| `make test` | SKILL.md frontmatter and headings, no em dashes in SKILL.md or README.md, manifests parse and their paths exist, symlink and project-copy installs into scratch directories |
+| `make test` | SKILL.md frontmatter (YAML-safe values) and headings, no em dashes in SKILL.md or README.md, manifests parse and their paths exist, symlink and project-copy installs into scratch directories, guard hook reads the repo that `-C` / `--git-dir` point at |
 | `shellcheck .claude/hooks/*.sh tests/*.sh` | Every script is shellcheck-clean |
 | `claude plugin validate .` | Local only (the CLI is not on the runner). Run after any manifest change |
 
 ## Guarding main
 
-`.claude/settings.json` runs `.claude/hooks/guard-bash.sh` before every Bash call; it is a copy of `security/.claude/hooks/guard-bash.sh` from claude-code-patterns, tested there. `.pre-commit-config.yaml` has `no-commit-to-branch`; run `pre-commit install` once per clone.
+`.claude/settings.json` runs `.claude/hooks/guard-bash.sh` before every Bash call; it started as a copy of `security/.claude/hooks/guard-bash.sh` from claude-code-patterns, plus the `-C<path>` and `--git-dir` handling (see `docs/decisions.md`); `make test` covers that part here. `.pre-commit-config.yaml` has `no-commit-to-branch`; run `pre-commit install` once per clone.
