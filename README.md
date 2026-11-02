@@ -28,9 +28,11 @@ ln -s ~/src/blind-review/skills/blind-review ~/.claude/skills/blind-review
 In one project (the skill runs as `/blind-review` in that repo; commit it to share it):
 
 ```bash
-git clone https://github.com/nkassis/blind-review.git /tmp/blind-review
+src="$(mktemp -d)"
+git clone https://github.com/nkassis/blind-review.git "$src"
 mkdir -p .claude/skills
-cp -R /tmp/blind-review/skills/blind-review .claude/skills/
+cp -R "$src/skills/blind-review" .claude/skills/
+rm -rf "$src"
 ```
 
 ## Use
@@ -40,7 +42,9 @@ cp -R /tmp/blind-review/skills/blind-review .claude/skills/
 /blind-review interactive "a senior engineer on this repo, skeptical"
 ```
 
-`mode` is `interactive` (the default) or `gate`. `audience` is who judges the work in reality; the default is skeptical and experienced.
+Installed as a plugin, type `/blind-review:blind-review` instead. Run it in the session that produced the work; it takes the brief and the deliverable from there.
+
+`mode` is `interactive` (the default) or `gate`. `audience` is who judges the work in reality; the default is skeptical and experienced. In `gate` mode the skill fixes the blocking findings it agrees with and reviews again, at most two more rounds; any it disagrees with go back to the caller with a reason.
 
 The skill builds the bundle the reviewer sees, in a new directory outside any repo:
 
