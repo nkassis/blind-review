@@ -1,6 +1,6 @@
 # blind-review
 
-A Claude Code skill that reviews a finished deliverable against the brief it was made from. It gives a fresh subagent only the brief and the deliverable, never the conversation, and asks it to review the way the real audience would. It has two modes: `interactive`, where you decide what to act on, and `gate`, where a calling skill acts on the verdict itself. Every report opens with a `PASS` or `FAIL` verdict; `FAIL` means at least one blocking finding.
+A skill for Claude Code and Codex that reviews a finished deliverable against the brief it was made from. It gives a fresh subagent only the brief and the deliverable, never the conversation, and asks it to review the way the real audience would. It has two modes: `interactive`, where you decide what to act on, and `gate`, where a calling skill acts on the verdict itself. Every report opens with a `PASS` or `FAIL` verdict; `FAIL` means at least one blocking finding.
 
 - `skills/blind-review/SKILL.md` - the skill
 - `.claude-plugin/` - plugin and marketplace manifests, so the repo installs as a Claude Code plugin
@@ -8,7 +8,23 @@ A Claude Code skill that reviews a finished deliverable against the brief it was
 
 ## Install
 
-Prerequisites: Claude Code. Pick one of the three.
+Use a Claude Code or Codex session that can spawn a fresh subagent without inheriting the conversation.
+
+### Codex
+
+Ask Codex's built-in skill installer to install the skill from this repository:
+
+```text
+$skill-installer install https://github.com/nkassis/blind-review/tree/main/skills/blind-review
+```
+
+For a manual install, copy `skills/blind-review/` into `.agents/skills/blind-review/` in your project, or `~/.agents/skills/blind-review/` for personal use across projects. Codex discovers new skills automatically; restart it if the skill does not appear. See [OpenAI's skill installation documentation](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
+
+Both agents use the same `SKILL.md`. The `.claude-plugin/` manifests and `.claude/` hooks configure Claude Code; installing the standalone skill in Codex installs its review instructions.
+
+### Claude Code
+
+Pick one of the three methods below.
 
 As a Claude Code plugin (the skill runs as `/blind-review:blind-review`):
 
@@ -37,12 +53,25 @@ rm -rf "$src"
 
 ## Use
 
+In Codex:
+
+```text
+$blind-review [mode] [audience]
+$blind-review interactive "a senior engineer on this repo, skeptical"
+```
+
+The reviewer must start without inherited conversation history. If your Codex subagent tool exposes `fork_turns`, use `fork_turns="none"` and pass only the review bundle and the reviewer instructions described in the skill. A reviewer that inherits the conversation does not provide a blind review. See [OpenAI's subagent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents) for availability and controls.
+
+In Claude Code:
+
 ```text
 /blind-review [mode] [audience]
 /blind-review interactive "a senior engineer on this repo, skeptical"
 ```
 
-Installed as a plugin, type `/blind-review:blind-review` instead. Run it in the session that produced the work; it takes the brief and the deliverable from there.
+Installed as a Claude Code plugin, type `/blind-review:blind-review` instead.
+
+In either agent, run it in the session that produced the work; it takes the brief and the deliverable from there.
 
 `mode` is `interactive` (the default) or `gate`. `audience` is who judges the work in reality; the default is skeptical and experienced. In `gate` mode the skill fixes the blocking findings it agrees with and reviews again, at most two more rounds; any it disagrees with go back to the caller with a reason.
 
